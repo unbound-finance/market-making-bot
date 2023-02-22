@@ -75,11 +75,11 @@ async function run(){
             console.log("final profit: ", profit - fee );
 
             // buy from huobi
-            let marketBuy = await huobi.createOrder("UNB/USDT", "market", "buy", 7000, huobiAsk[0][0]);
+            let marketBuy = await huobi.createOrder("UNB/USDT", "market", "buy", maxBuyAmount, huobiAsk[0][0]);
             console.log(marketBuy.id);
 
             // sell to kucoin
-            let marketSell = await kucoin.createOrder("UNB/USDT", "market", "sell", 10000);
+            let marketSell = await kucoin.createOrder("UNB/USDT", "market", "sell", maxBuyAmount);
             console.log(marketSell);
         }
     } else if(diff_B < 0){
