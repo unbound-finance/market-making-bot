@@ -1,0 +1,16 @@
+{
+  "name": "mm-bot",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "bignumber.js": "^9.1.1",
+    "ccxt": "^2.8.17",
+    "dotenv": "^16.0.3"
+  }
+}
