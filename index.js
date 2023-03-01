@@ -52,7 +52,7 @@ async function watchForArbAndExecute(){
         // console.log(huobiOrderBook['bids'])   
         console.log(difference)
 
-        if(difference.diff_BtoA > 0 && difference.diff_AtoB > 0){
+        if(difference.diff_BtoA >= 0 && difference.diff_AtoB >= 0){
             console.log("=====> No arb available");
             return;
         }
