@@ -9,8 +9,14 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@thanpolas/crypto-utils": "^0.4.1",
+    "@uniswap/sdk-core": "^3.2.0",
+    "@uniswap/v3-sdk": "^3.9.0",
     "bignumber.js": "^9.1.1",
     "ccxt": "^2.8.17",
-    "dotenv": "^16.0.3"
+    "dotenv": "^16.0.3",
+    "invariant": "^2.2.4",
+    "jsbi": "^3.2.5",
+    "web3": "^1.8.2"
   }
 }
