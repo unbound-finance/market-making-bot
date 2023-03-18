@@ -5,7 +5,7 @@ require('dotenv').config();
 var { tickToPrice } = require("@uniswap/v3-sdk")
 var { Token } = require('@uniswap/sdk-core')
 var JSBI = require("jsbi");
-var bn = require('bignumber.js')
+// var bn = require('bignumber.js')
 const { toFixed } = require('@thanpolas/crypto-utils');
 const exchange = require('./utils/exchangeLib');
 
@@ -206,21 +206,22 @@ function ask_side_profit(asks, xs, pool_info, fc, fd) {
 
 function walk_the_book(bids, asks, pool_info, fc, fd) {
 
-    let pDex = new bn(pool_info['sqrtP']).multipliedBy(pool_info['sqrtP']);
+    // let pDex = new bn(pool_info['sqrtP']).multipliedBy(pool_info['sqrtP']);
     let pCex = bids[0][0] * (1 - fc) * (1 - fd);
     
     // Condition for arb on the bid side - buy on dex, sell on cex
-    if (pDex.isLessThan(pCex)){
+    // if (pDex.isLessThan(pCex)){
+    if (pool_info['sqrtP'] * pool_info['sqrtP'] < bids[0][0] * (1 - fc) * (1 - fd)){
         // Maximum amt we can buy on dex
         var xb = compute_xb(pool_info.sqrtP, pool_info.L);
         return bid_side_profit(bids, xb, pool_info, fc, fd);
     }
 
     // Condition for arb on the ask side - cex buy, dex sell
-    if(new bn(pool_info['sqrtP']).multipliedBy(pool_info['sqrtP']).multipliedBy(1-fc).multipliedBy(1-fd).isGreaterThan(asks[0][0])){
+    // if(new bn(pool_info['sqrtP']).multipliedBy(pool_info['sqrtP']).multipliedBy(1-fc).multipliedBy(1-fd).isGreaterThan(asks[0][0])){
+    if(pool_info['sqrtP'] * pool_info['sqrtP'] * (1-fc) * (1-fd) > asks[0][0]){
         // Maximum amt we can buy on dex
         var xs = compute_xs(pool_info['sqrtP'], pool_info['L']);
-        console.log(xs)
         return ask_side_profit(asks, xs, pool_info, fc, fd)
     }
 
