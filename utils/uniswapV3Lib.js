@@ -17,6 +17,16 @@ const Q192 = JSBI.exponentiate(Q96, JSBI.BigInt(2));
 const MaxUint256 = JSBI.BigInt('0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff');
 const RESOLUTION = JSBI.BigInt(96);
 
+
+exports.getPoolLiquidityAndSqrt = async (pool, baseToken, quoteToken) => {
+
+  var { sqrtPriceX96 } = await pool.methods.slot0().call();
+  sqrtPriceX96 = sqrtPriceX96.toString()
+  const liquidity = (await pool.methods.liquidity().call()).toString();
+
+  return { liquidity, sqrtPriceX96 }
+}
+
 exports.getPoolInfo = async (pool, baseToken, quoteToken) => {
 
   const { tick, sqrtPriceX96 } = await pool.methods.slot0().call();

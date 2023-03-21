@@ -5,9 +5,10 @@ require('dotenv').config();
 var { tickToPrice } = require("@uniswap/v3-sdk")
 var { Token } = require('@uniswap/sdk-core')
 var JSBI = require("jsbi");
-// var bn = require('bignumber.js')
+var bn = require('bignumber.js')
 const { toFixed } = require('@thanpolas/crypto-utils');
 const exchange = require('./utils/exchangeLib');
+const web3Lib = require('./utils/web3');
 
 const univ3 = require('./utils/uniswapV3Lib');
 const CONFIG = require("./config/config")
@@ -18,7 +19,7 @@ const OFFSET = -124
 const SPACING = 200
 var web3 = new Web3(new Web3.providers.HttpProvider(CONFIG.NETWORK_RPC_ARBITRUM));
 
-const DEX_FEE = 0.003; // 0.3%
+const DEX_FEE = 0.01; // 1%
 
 const TOKEN0 = {
     address: "0xD5eBD23D5eb968c2efbA2B03F27Ee61718609A71",
@@ -35,10 +36,11 @@ const TOKEN1 = {
 }
 
 
-const baseToken = new Token(CONFIG.CHAIN_ID, TOKEN0.address, TOKEN0.decimals, TOKEN0.symbol, TOKEN0.name)
-const quoteToken = new Token(CONFIG.CHAIN_ID, TOKEN1.address, TOKEN1.decimals, TOKEN1.symbol, TOKEN1.name);
+const baseToken = new Token(CONFIG.CHAIN_ID_ARBITRUM, TOKEN0.address, TOKEN0.decimals, TOKEN0.symbol, TOKEN0.name)
+const quoteToken = new Token(CONFIG.CHAIN_ID_ARBITRUM, TOKEN1.address, TOKEN1.decimals, TOKEN1.symbol, TOKEN1.name);
 
-const undUsdcPool = new web3.eth.Contract(CONFIG.UNIV3_POOL_ABI, CONFIG.UNI_V3_POOL_POLYGON)
+const undUsdcPool = new web3.eth.Contract(CONFIG.UNIV3_POOL_ABI, CONFIG.UNI_V3_POOL_ARBITRUM)
+const uniswapV3Router = new web3.eth.Contract(CONFIG.UNIV3_ROUTER_ABI, CONFIG.UNIV3_ROUTER_ADDRESS)
 
 run()
 async function run() {
@@ -64,6 +66,52 @@ async function run() {
 
         let result = walk_the_book(kucoinOrderBook.bids, kucoinOrderBook.asks, poolInfo, fees['kucoin']['taker'], DEX_FEE);
         console.log(result)
+
+        if(result == "None"){
+            return;
+        } else if(result.side == "Bid" && result.amount > 0){
+            // buy on dex and sell on cex
+
+            // execute sell transaction cex first -- needs to be tested
+            let marketSell = await kucoin.createOrder("UNB/USDT", "market", "sell", result.amount);
+
+            // execute buy transaction on uniswapv3
+            let buyTx = await web3Lib.swapExactOutputSingle(
+                web3,
+                uniswapV3Router,
+                CONFIG.CHAIN_ID_ARBITRUM,
+                TOKEN1.address, // USDC
+                TOKEN0.address, // UND
+                10000,
+                new bn(result.amount).multipliedBy(1e18).toFixed(), // amountOut
+                "9999999999999999999999999999999999999999", // TODO; slippage calcultaion to be added // amountInMaximum
+                0
+            )
+
+
+        } else if(result.side == "Ask" && result.amount > 0){
+            // buy on cex and sell on dex
+
+            // execute buy transaction cex first -- needs to be tested
+            let marketBuy = await kucoin.createOrder("UNB/USDT", "market", "buy", result.amount);
+
+            // execute sell transaction on uniswapv3
+            let buyTx = await web3Lib.swapExactInputSingle(
+                web3,
+                uniswapV3Router,
+                CONFIG.CHAIN_ID_ARBITRUM,
+                TOKEN0.address, // UND
+                TOKEN1.address, // USDC
+                10000,
+                new bn(result.amount).multipliedBy(1e18).toFixed(), // amountIn
+                0, // amountOutMinimum - TODO; slippage calcultaion to be added
+                0
+            )
+            console.log({buyTx})
+        } else {
+            return "None"
+        }
+
     } catch (e) {
         console.log("error while initialization", e.toString());
         fs.appendFile('./logs/errors.txt', Date.now() + " - error while initialization: " + e.toString() + ",\n", (err) => { })
