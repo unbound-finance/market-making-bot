@@ -508,12 +508,12 @@ exports.walk_the_book_y = (bids, asks, pool_info, fc, fd, th) => {
 
     // Condition for arb on the bid side - buy on dex, sell on cex
     if (sqrtP * sqrtP * bids[0][0] * (1 - fc) * (1 - fd) > 1.0) {
-        return bid_side_profit_x(bids, pool_info, fc, fd, th);
+        return bid_side_profit_y(bids, pool_info, fc, fd, th);
     }
 
     // Condition for arb on the ask side - cex buy, dex sell
     if (sqrtP * sqrtP * asks[0][0] < (1 - fc) * (1 - fd)) {
-        return ask_side_profit_x(asks, pool_info, fc, fd, th);
+        return ask_side_profit_y(asks, pool_info, fc, fd, th);
     }
 
     return null;
