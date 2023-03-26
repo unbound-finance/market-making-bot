@@ -229,8 +229,8 @@ function bid_side_profit_x(bids, pool_info, fc, fd, th) {
     let xb = liq.liq[0], ys = liq.liq[3];
     x = xb;
 
-    function PnL(x) {
-        return pnl_bid_x(x, sc, vc, sd, vd, fc, fd, b, sqrtP, L);
+    function PnL(delx) {
+        return pnl_bid_x(delx, sc, vc, sd, vd, fc, fd, b, sqrtP, L);
     }
 
     while (k < K) {
@@ -282,6 +282,8 @@ function pnl_ask_x(x, sc, vc, sd, vd, fc, fd, ak, sqrtP, L) {
     return vd + pos * (1 - fd) * sqrtP * sqrtP * L / (L + pos * sqrtP * (1 - fd)) - (vc + ak * x) / (1 - fc);
 }
 
+// Algorithm to compute the maximum profit and the amount 
+// corresponding to it (on the ask side & if y is base token)
 function ask_side_profit_x(asks, pool_info, fc, fd, th) {
     let K = asks.length;
     if (K == 0) { return { amount: 0.0, profit: 0.0, side: "Ask", cexamtin: 0.0 }; }
@@ -300,8 +302,8 @@ function ask_side_profit_x(asks, pool_info, fc, fd, th) {
     let xs = liq.liq[1], yb = liq.liq[2];
     x = xs / (1 - fd);
 
-    function PnL(x) {
-        return pnl_ask_x(x, sc, vc, sd, vd, fc, fd, a, sqrtP, L);
+    function PnL(delx) {
+        return pnl_ask_x(delx, sc, vc, sd, vd, fc, fd, a, sqrtP, L);
     }
 
     while (k < K) {
@@ -340,17 +342,177 @@ function ask_side_profit_x(asks, pool_info, fc, fd, th) {
             q = asks[k][1];
         }
     }
-    return { amount: sc - q, profit: PnL(0), side: "Ask", force: "cex", cexamtin: (sc - q * a) / (1-fd) }; //delta_c = q
+    return { amount: sc - q, profit: PnL(0), side: "Ask", force: "cex", cexamtin: (sc - q * a) / (1 - fd) }; //delta_c = q
 }
 
 exports.walk_the_book_x = (bids, asks, pool_info, fc, fd, th) => {
+    sqrtP = pool_info.sqrtP;
+
     // Condition for arb on the bid side - buy on dex, sell on cex
-    if (pool_info['sqrtP'] * pool_info['sqrtP'] < bids[0][0] * (1 - fc) * (1 - fd)) {
+    if (sqrtP * sqrtP < bids[0][0] * (1 - fc) * (1 - fd)) {
         return bid_side_profit_x(bids, pool_info, fc, fd, th);
     }
 
     // Condition for arb on the ask side - cex buy, dex sell
-    if (pool_info['sqrtP'] * pool_info['sqrtP'] * (1 - fc) * (1 - fd) > asks[0][0]) {
+    if (sqrtP * sqrtP * (1 - fc) * (1 - fd) > asks[0][0]) {
+        return ask_side_profit_x(asks, pool_info, fc, fd, th);
+    }
+
+    return null;
+};
+
+// Uni v3 functions: if y is gov token and x is base token
+function pnl_bid_y(y, sc, vc, sd, vd, fc, fd, bk, sqrtP, L) {
+    let pos = sc - sd + y;
+    return (vc + bk * y) * (1 - fc) - vd / (1 - fd) - pos * L / (L * sqrtP - pos) / sqrtP / (1 - fd);
+}
+
+// Algorithm to compute the maximum profit and the amount 
+// corresponding to it (on the bid side & if x is base token)
+function bid_side_profit_y(bids, pool_info, fc, fd, th) {
+    let K = bids.length;
+    if (K == 0) { return { amount: 0.0, profit: 0.0, side: "Bid", cexamtout: 0.0 }; }
+
+    // trade-size and volume
+    var sc = 0.0, vc = 0.0, sd = 0.0, vd = 0.0;
+
+    // cex index
+    var k = 0, b = bids[0][0], q = bids[0][1];
+
+    // dex index and stuff
+    var sqrtP = pool_info.sqrtP;
+    t = th._current_tick;
+    L = pool_info.liquidity[t];
+    liq = th.get_liquidity_and_subt_at_tick(t, L, sqrtP);
+    let yb = liq.liq[2], xs = liq.liq[1];
+    y = yb;
+
+    function PnL(dely) {
+        return pnl_bid_y(dely, sc, vc, sd, vd, fc, fd, b, sqrtP, L);
+    }
+
+    while (k < K) {
+        z = L * (sqrtP - 1 / Math.sqrt(b * (1 - fc) * (1 - fd))) - sc + sd;
+        if (z <= 0) { return { amount: sc, profit: PnL(0), side: "Bid", cexamtout: vc * (1 - fc) }; }
+        if (y < q) {
+            if (z <= y) { return { amount: sc + z, profit: PnL(z), side: "Bid", cexamtout: (vc + z * b) * (1 - fc) }; }
+            else if (pool_info.liquidity[t - 1] == 0) {
+                return { amount: sc, profit: PnL(0), side: "Bid", cexamtout: vc * (1 - fc), force: "dex" }; //delta_d = y
+            }
+            else {
+                sc += y;
+                vc += b * y;
+                sd += yb;
+                vd += xs;
+                q -= y;
+                t -= 1;
+                L = pool_info.liquidity[t];
+                sqrtP = liq.sqrtP_subt;
+                liq = th.get_liquidity_and_subt_at_tick(t, L, sqrtP);
+                yb = liq.liq[2];
+                xs = liq.liq[1];
+                y = yb;
+                continue;
+            }
+        } else if (z <= q) {
+            return { amount: sc + z, profit: PnL(z), side: "Bid", cexamtout: (vc + b * z) * (1 - fc) };
+        }
+        sc += q;
+        vc += q * b;
+        y -= q;
+        k += 1;
+        if (k < K) {
+            b = bids[k][0];
+            q = bids[k][1];
+        }
+    }
+    return {
+        amount: sc - q,  // delta_c = q
+        profit: pnl_bid_x(0),
+        side: "Bid",
+        cexamtout: (vc - q * b) * (1 - fc),
+        force: "cex"
+    };
+}
+
+function pnl_ask_y(y, sc, vc, sd, vd, fc, fd, ak, sqrtP, L) {
+    pos = (sc - sd / (1 - fd) + y);
+    return vd + pos * (1 - fd) * L / (L * sqrtP * sqrtP + pos * sqrtP * (1 - fd)) - (vc + ak * y) / (1 - fc);
+}
+
+// Algorithm to compute the maximum profit and the amount 
+// corresponding to it (on the ask side & if x is base token)
+function ask_side_profit_y(asks, pool_info, fc, fd, th) {
+    let K = asks.length;
+    if (K == 0) { return { amount: 0.0, profit: 0.0, side: "Ask", cexamtin: 0.0 }; }
+
+    // trade-size and volume
+    var sc = 0.0, vc = 0.0, sd = 0.0, vd = 0.0;
+
+    //cex index
+    var k = 0, a = asks[0][0], q = asks[0][1];
+
+    //dex stuff
+    var sqrtP = pool_info.sqrtP;
+    t = th._current_tick;
+    L = pool_info.liquidity[t];
+    liq = th.get_liquidity_and_subt_at_tick(t, L, sqrtP);
+    let ys = liq.liq[3], xb = liq.liq[0];
+    y = ys / (1 - fd);
+
+    function PnL(dely) {
+        return pnl_ask_y(dely, sc, vc, sd, vd, fc, fd, a, sqrtP, L);
+    }
+
+    while (k < K) {
+        z = L * (Math.sqrt((1 - fc) / a) - sqrtP / Math.sqrt(1 - fd)) / Math.sqrt(1 - fd) - sc + sd / (1 - fd);
+        if (z <= 0) { return { amount: sc, profit: PnL(0), side: "Ask", cexamtin: vc / (1 - fc) }; }
+        if (y < q) {
+            if (z <= y) { return { amount: sc + z, profit: PnL(z), side: "Ask", cexamtin: (vc + z * a) / (1 - fd) }; }
+            else if (pool_info.liquidity[t + 1] == 0) {
+                return { amount: sc, profit: PnL(0), side: "Ask", force: "dex", cexamtin: vc / (1 - fd) }; //delta_d = x
+            }
+            else {
+                sc += y;
+                vc += y * a;
+                sd += ys;
+                vd += xb;
+                q -= y;
+                t += 1;
+                L = pool_info.liquidity[t];
+                liq = th.get_liquidity_and_subt_at_tick(t, L, sqrtP);
+                sqrtP = liq.sqrtP_subt;
+                ys = liq.liq[3];
+                xb = liq.liq[0];
+                y = ys / (1 - fd);
+                continue;
+            }
+        } else if (z <= q) {
+            return { amount: sc + z, profit: PnL(z), side: "Ask", cexamtin: (vc + z * a) / (1 - fd) };
+        }
+
+        sc += q;
+        vc += q * a;
+        y -= q;
+        k += 1;
+        if (k < K) {
+            a = asks[k][0];
+            q = asks[k][1];
+        }
+    }
+    return { amount: sc - q, profit: PnL(0), side: "Ask", force: "cex", cexamtin: (sc - q * a) / (1 - fd) }; //delta_c = q
+}
+
+exports.walk_the_book_y = (bids, asks, pool_info, fc, fd, th) => {
+    sqrtP = pool_info.sqrtP;
+
+    // Condition for arb on the bid side - buy on dex, sell on cex
+    if (sqrtP * sqrtP * bids[0][0] * (1 - fc) * (1 - fd) > 1.0) {
+        return bid_side_profit_x(bids, pool_info, fc, fd, th);
+    }
+
+    // Condition for arb on the ask side - cex buy, dex sell
+    if (sqrtP * sqrtP * asks[0][0] < (1 - fc) * (1 - fd)) {
         return ask_side_profit_x(asks, pool_info, fc, fd, th);
     }
 
