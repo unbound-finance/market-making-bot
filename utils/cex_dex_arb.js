@@ -162,6 +162,10 @@ exports.TickHandler = class {
     _get_tick_from_sqrt_price(sqrt_price) {
         return Math.floor((2 * Math.log(sqrt_price) / Math.log(1.0001) - this.O) / this.S);
     }
+    
+    _get_pool_tick_from_sqrt_price(sqrt_price){
+        return Math.floor(2 * Math.log(sqrt_price) / Math.log(1.0001) - this.O);
+    }
 
     set_current_tick_and_sqrt_price(sqrt_price) {
         this._current_tick = this._get_tick_from_sqrt_price(sqrt_price);
@@ -203,7 +207,7 @@ exports.TickHandler = class {
 };
 
 
-// Uni v3 functions: if x is gov token and y is base token
+// Uni v3 functions: if x is gov token and y is quote token
 function pnl_bid_x(x, sc, vc, sd, vd, fc, fd, bk, sqrtP, L) {
     let pos = sc - sd + x;
     return (vc + bk * x) * (1 - fc) - vd / (1 - fd) - pos * sqrtP * sqrtP * L / (L - pos * sqrtP) / (1 - fd);
@@ -211,7 +215,7 @@ function pnl_bid_x(x, sc, vc, sd, vd, fc, fd, bk, sqrtP, L) {
 
 // Algorithm to compute the maximum profit and the amount 
 // corresponding to it (on the bid side & if y is base token)
-function bid_side_profit_x(bids, pool_info, fc, fd, th) {
+function bid_side_profit_x(bids, pool_info, fc, fd, th, max_size = Infinity, max_volume = Infinity) {
     let K = bids.length;
     if (K == 0) { return { amount: 0.0, profit: 0.0, side: "Bid", cexamtout: 0.0 }; }
 
@@ -235,6 +239,7 @@ function bid_side_profit_x(bids, pool_info, fc, fd, th) {
 
     while (k < K) {
         z = L * (1 / sqrtP - 1 / Math.sqrt(b * (1 - fc) * (1 - fd))) - sc + sd;
+        z = Math.min(z, max_size - sc, (max_volume / (1 - fc) - vc) / b);
         if (z <= 0) { return { amount: sc, profit: PnL(0), side: "Bid", cexamtout: vc * (1 - fc) }; }
         if (x < q) {
             if (z <= x) { return { amount: sc + z, profit: PnL(z), side: "Bid", cexamtout: (vc + z * b) * (1 - fc) }; }
@@ -284,7 +289,7 @@ function pnl_ask_x(x, sc, vc, sd, vd, fc, fd, ak, sqrtP, L) {
 
 // Algorithm to compute the maximum profit and the amount 
 // corresponding to it (on the ask side & if y is base token)
-function ask_side_profit_x(asks, pool_info, fc, fd, th) {
+function ask_side_profit_x(asks, pool_info, fc, fd, th, max_size = Infinity, max_volume = Infinity) {
     let K = asks.length;
     if (K == 0) { return { amount: 0.0, profit: 0.0, side: "Ask", cexamtin: 0.0 }; }
 
@@ -308,11 +313,12 @@ function ask_side_profit_x(asks, pool_info, fc, fd, th) {
 
     while (k < K) {
         z = L * (Math.sqrt((1 - fc) / a) - 1 / sqrtP / Math.sqrt(1 - fd)) / Math.sqrt(1 - fd) - sc + sd / (1 - fd);
+        z = Math.min(z, max_size - sc, (max_volume * (1 - fc) - vc) / a);
         if (z <= 0) { return { amount: sc, profit: PnL(0), side: "Ask", cexamtin: vc / (1 - fc) }; }
         if (x < q) {
-            if (z <= x) { return { amount: sc + z, profit: PnL(z), side: "Ask", cexamtin: (vc + z * a) / (1 - fd) }; }
+            if (z <= x) { return { amount: sc + z, profit: PnL(z), side: "Ask", cexamtin: (vc + z * a) / (1 - fc) }; }
             else if (pool_info.liquidity[t - 1] == 0) {
-                return { amount: sc, profit: PnL(0), side: "Ask", force: "dex", cexamtin: vc / (1 - fd) }; //delta_d = x
+                return { amount: sc, profit: PnL(0), side: "Ask", force: "dex", cexamtin: vc / (1 - fc) }; //delta_d = x
             }
             else {
                 sc += x;
@@ -330,7 +336,7 @@ function ask_side_profit_x(asks, pool_info, fc, fd, th) {
                 continue;
             }
         } else if (z <= q) {
-            return { amount: sc + z, profit: PnL(z), side: "Ask", cexamtin: (vc + z * a) / (1 - fd) };
+            return { amount: sc + z, profit: PnL(z), side: "Ask", cexamtin: (vc + z * a) / (1 - fc) };
         }
 
         sc += q;
@@ -342,26 +348,26 @@ function ask_side_profit_x(asks, pool_info, fc, fd, th) {
             q = asks[k][1];
         }
     }
-    return { amount: sc - q, profit: PnL(0), side: "Ask", force: "cex", cexamtin: (sc - q * a) / (1 - fd) }; //delta_c = q
+    return { amount: sc - q, profit: PnL(0), side: "Ask", force: "cex", cexamtin: (sc - q * a) / (1 - fc) }; //delta_c = q
 }
 
-exports.walk_the_book_x = (bids, asks, pool_info, fc, fd, th) => {
+exports.walk_the_book_x = (bids, asks, pool_info, fc, fd, th, reserves = { cex0: Infinity, cex1: Infinity, dex0: Infinity, dex1: Infinity }) => {
     sqrtP = pool_info.sqrtP;
 
     // Condition for arb on the bid side - buy on dex, sell on cex
     if (sqrtP * sqrtP < bids[0][0] * (1 - fc) * (1 - fd)) {
-        return bid_side_profit_x(bids, pool_info, fc, fd, th);
+        return bid_side_profit_x(bids, pool_info, fc, fd, th, max_size = reserves.cex0, max_volume = reserves.dex1);
     }
 
     // Condition for arb on the ask side - cex buy, dex sell
     if (sqrtP * sqrtP * (1 - fc) * (1 - fd) > asks[0][0]) {
-        return ask_side_profit_x(asks, pool_info, fc, fd, th);
+        return ask_side_profit_x(asks, pool_info, fc, fd, th, max_size = reserves.dex0, max_volume = reserves.cex1);
     }
 
     return null;
 };
 
-// Uni v3 functions: if y is gov token and x is base token
+// Uni v3 functions: if y is gov token and x is quote token
 function pnl_bid_y(y, sc, vc, sd, vd, fc, fd, bk, sqrtP, L) {
     let pos = sc - sd + y;
     return (vc + bk * y) * (1 - fc) - vd / (1 - fd) - pos * L / (L * sqrtP - pos) / sqrtP / (1 - fd);
@@ -369,7 +375,7 @@ function pnl_bid_y(y, sc, vc, sd, vd, fc, fd, bk, sqrtP, L) {
 
 // Algorithm to compute the maximum profit and the amount 
 // corresponding to it (on the bid side & if x is base token)
-function bid_side_profit_y(bids, pool_info, fc, fd, th) {
+function bid_side_profit_y(bids, pool_info, fc, fd, th, max_size = Infinity, max_volume = Infinity) {
     let K = bids.length;
     if (K == 0) { return { amount: 0.0, profit: 0.0, side: "Bid", cexamtout: 0.0 }; }
 
@@ -393,6 +399,7 @@ function bid_side_profit_y(bids, pool_info, fc, fd, th) {
 
     while (k < K) {
         z = L * (sqrtP - 1 / Math.sqrt(b * (1 - fc) * (1 - fd))) - sc + sd;
+        z = Math.min(z, max_size - sc, (max_volume / (1 - fc) - vc) / b);
         if (z <= 0) { return { amount: sc, profit: PnL(0), side: "Bid", cexamtout: vc * (1 - fc) }; }
         if (y < q) {
             if (z <= y) { return { amount: sc + z, profit: PnL(z), side: "Bid", cexamtout: (vc + z * b) * (1 - fc) }; }
@@ -442,7 +449,7 @@ function pnl_ask_y(y, sc, vc, sd, vd, fc, fd, ak, sqrtP, L) {
 
 // Algorithm to compute the maximum profit and the amount 
 // corresponding to it (on the ask side & if x is base token)
-function ask_side_profit_y(asks, pool_info, fc, fd, th) {
+function ask_side_profit_y(asks, pool_info, fc, fd, th, max_size = Infinity, max_volume = Infinity) {
     let K = asks.length;
     if (K == 0) { return { amount: 0.0, profit: 0.0, side: "Ask", cexamtin: 0.0 }; }
 
@@ -466,11 +473,12 @@ function ask_side_profit_y(asks, pool_info, fc, fd, th) {
 
     while (k < K) {
         z = L * (Math.sqrt((1 - fc) / a) - sqrtP / Math.sqrt(1 - fd)) / Math.sqrt(1 - fd) - sc + sd / (1 - fd);
+        z = Math.min(z, max_size - sc, (max_volume * (1 - fc) - vc) / a);
         if (z <= 0) { return { amount: sc, profit: PnL(0), side: "Ask", cexamtin: vc / (1 - fc) }; }
         if (y < q) {
-            if (z <= y) { return { amount: sc + z, profit: PnL(z), side: "Ask", cexamtin: (vc + z * a) / (1 - fd) }; }
+            if (z <= y) { return { amount: sc + z, profit: PnL(z), side: "Ask", cexamtin: (vc + z * a) / (1 - fc) }; }
             else if (pool_info.liquidity[t + 1] == 0) {
-                return { amount: sc, profit: PnL(0), side: "Ask", force: "dex", cexamtin: vc / (1 - fd) }; //delta_d = x
+                return { amount: sc, profit: PnL(0), side: "Ask", force: "dex", cexamtin: vc / (1 - fc) }; //delta_d = x
             }
             else {
                 sc += y;
@@ -488,7 +496,7 @@ function ask_side_profit_y(asks, pool_info, fc, fd, th) {
                 continue;
             }
         } else if (z <= q) {
-            return { amount: sc + z, profit: PnL(z), side: "Ask", cexamtin: (vc + z * a) / (1 - fd) };
+            return { amount: sc + z, profit: PnL(z), side: "Ask", cexamtin: (vc + z * a) / (1 - fc) };
         }
 
         sc += q;
@@ -500,20 +508,20 @@ function ask_side_profit_y(asks, pool_info, fc, fd, th) {
             q = asks[k][1];
         }
     }
-    return { amount: sc - q, profit: PnL(0), side: "Ask", force: "cex", cexamtin: (sc - q * a) / (1 - fd) }; //delta_c = q
+    return { amount: sc - q, profit: PnL(0), side: "Ask", force: "cex", cexamtin: (sc - q * a) / (1 - fc) }; //delta_c = q
 }
 
-exports.walk_the_book_y = (bids, asks, pool_info, fc, fd, th) => {
+exports.walk_the_book_y = (bids, asks, pool_info, fc, fd, th, reserves = { cex0: Infinity, cex1: Infinity, dex0: Infinity, dex1: Infinity }) => {
     sqrtP = pool_info.sqrtP;
 
     // Condition for arb on the bid side - buy on dex, sell on cex
     if (sqrtP * sqrtP * bids[0][0] * (1 - fc) * (1 - fd) > 1.0) {
-        return bid_side_profit_y(bids, pool_info, fc, fd, th);
+        return bid_side_profit_y(bids, pool_info, fc, fd, th, max_size = reserves.cex1, max_volume = reserves.dex0);
     }
 
     // Condition for arb on the ask side - cex buy, dex sell
     if (sqrtP * sqrtP * asks[0][0] < (1 - fc) * (1 - fd)) {
-        return ask_side_profit_y(asks, pool_info, fc, fd, th);
+        return ask_side_profit_y(asks, pool_info, fc, fd, th, max_size = reserves.dex1, max_volume = reserves.cex0);
     }
 
     return null;

@@ -17,16 +17,13 @@ const CONFIG = require("./config/config");
 
 const MIN_PROFIT = 0; // setiing minimum profit to 0% right now
 const MIN_AMT = 100; // minimum amount to trade
-var kucoin, huobi, fees;
-const SPACING = 200;
-const NEIGHBOUR_DEPTH = 2;
-const DELTA_DECIMAL = 12;
-const AMT_PRECISION = 1;
+var kucoin, huobi;
+const NEIGHBOUR_DEPTH = 2; //how many neighbouring ticks to query
+const AMT_PRECISION = 10 ** 0; //how many decimals for base token
+const CEX_SYMBOL = "UNB/USDT";
+const RESERVES_MULT = 0.95; //reduce the reserves by this much when fed into algo
 
 var web3 = new Web3(new Web3.providers.HttpProvider(CONFIG.NETWORK_RPC_ARBITRUM));
-
-const DEX_FEE = 0.01; // 1%
-const DEX_FEE_STANDARD = 10000;
 
 const TOKEN0 = {
     address: "0xD5eBD23D5eb968c2efbA2B03F27Ee61718609A71",
@@ -39,7 +36,7 @@ const TOKEN1 = {
     address: "0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8",
     decimals: 6,
     name: "USD Coin (PoS)",
-    symbol: "USDC "
+    symbol: "USDC"
 };
 
 
@@ -48,6 +45,18 @@ const quoteToken = new Token(CONFIG.CHAIN_ID_ARBITRUM, TOKEN1.address, TOKEN1.de
 
 const undUsdcPool = new web3.eth.Contract(CONFIG.UNIV3_POOL_ABI, CONFIG.UNI_V3_POOL_ARBITRUM);
 const uniswapV3Router = new web3.eth.Contract(CONFIG.UNIV3_ROUTER_ABI, CONFIG.UNIV3_ROUTER_ADDRESS);
+
+const token0Contract = new web3.eth.Contract(CONFIG.ERC20_ABI, TOKEN0.address);
+const token1Contract = new web3.eth.Contract(CONFIG.ERC20_ABI, TOKEN1.address);
+
+async function get_dex_reserves() {
+    var reserves0 = await token0Contract.methods.balanceOf(process.env.ADDRESS).call();
+    var reserves1 = await token1Contract.methods.balanceOf(process.env.ADDRESS).call();
+    return {
+        reserves0: parseFloat(reserves0) / (10 ** TOKEN0.decimals) * RESERVES_MULT,
+        reserves1: parseFloat(reserves1) / (10 ** TOKEN1.decimals) * RESERVES_MULT
+    };
+}
 
 // Convert pool info into actual values
 function convert_price(price) {
@@ -62,37 +71,44 @@ function convert_liquidity(pool_info) {
 
 function _initAndTestConnections() {
     kucoin = new ccxt.kucoin({ enableRateLimit: true });
-    // huobi = new ccxt.huobi();
+    huobi = new ccxt.huobi();
 
     kucoin.apiKey = process.env.KUCOIN_APIKEY;
     kucoin.secret = process.env.KUCOIN_SECRET;
     kucoin.password = process.env.KUCOIN_PASSWORD;
 
-    // huobi.apiKey = process.env.HUOBI_APIKEY;
-    // huobi.secret = process.env.HUOBI_SECRET;
+    huobi.apiKey = process.env.HUOBI_APIKEY;
+    huobi.secret = process.env.HUOBI_SECRET;
 
     // test connection with exchange
     kucoin.checkRequiredCredentials();
-    // huobi.checkRequiredCredentials();
+    huobi.checkRequiredCredentials();
 
-    return [kucoin];
-    // return [kucoin, huobi];
+    return [{
+        exchange: kucoin,
+        minamt: 1.1 //required minimum size of trade in quote token
+    },
+    {
+        exchange: huobi,
+        minamt: 10.1 //required minimum size of trade in quote token
+    }];
 }
 
 async function populate_neighbouring_liquidity(pool, pool_info, th) {
     var current_tick = th._current_tick;
     let liq = parseFloat(pool_info.liquidity);
+    let spacing = pool_info.tickSpacing;
     var liquidity = {};
     liquidity[current_tick] = liq;
     for (t = current_tick + 1; t <= current_tick + NEIGHBOUR_DEPTH; t++) {
-        net_liq = await univ3.getPoolLiquidityNet(pool, t * SPACING);
+        net_liq = await univ3.getPoolLiquidityNet(pool, t * spacing);
         liq += parseFloat(net_liq);
         liquidity[t] = liq;
     }
 
     liq = parseFloat(pool_info.liquidity);
     for (t = current_tick - 1; t >= current_tick - NEIGHBOUR_DEPTH; t--) {
-        net_liq = await univ3.getPoolLiquidityNet(pool, (t + 1) * SPACING);
+        net_liq = await univ3.getPoolLiquidityNet(pool, (t + 1) * spacing);
         liq -= parseFloat(net_liq);
         liquidity[t] = liq;
     }
@@ -112,23 +128,23 @@ async function make_cex_dex_trade(trade) {
     // buy on dex, sell on cex
     if (trade.side == "Bid" && trade.amount >= MIN_AMT && trade.profit >= MIN_PROFIT) {
 
-        // execute sell transaction on cex first
-        cex_order = await trade.exchange_var.createOrder('UNB/USDT', "market", "sell", trade.amount, trade.exchange_price);
-
-        // execute buy transaction on uniswapv3
+        // execute buy transaction on uniswapv3 first?
         dex_order = await web3Lib.swapExactOutputSingle(
             web3,
             uniswapV3Router,
             CONFIG.CHAIN_ID_ARBITRUM,
             TOKEN1.address, // USDC
             TOKEN0.address, // UND
-            DEX_FEE_STANDARD,
-            new bn(trade.amount).multipliedBy(1e18).toFixed(), // amountOut
-            new bn(trade.cexamtout - MIN_PROFIT).multipliedBy(1e6).toFixed(0), //amountInMaximum -- FIX THIS??
+            trade.dex_fee_standard,
+            new bn(trade.amount).multipliedBy(10 ** baseToken.decimals).toFixed(), // amountOut
+            new bn(trade.cexamtout - MIN_PROFIT).multipliedBy(10 ** quoteToken.decimals).toFixed(0), //amountInMaximum
             0
         );
+        console.log("dex_order:", dex_order);
 
-        console.log("dex_order:", dex_order)
+        // execute sell transaction on cex after?
+        cex_order = await trade.exchange_var.createOrder(CEX_SYMBOL, "market", "sell", trade.amount, trade.exchange_price);
+        console.log("cex_order:", cex_order.id);
 
         dex_side = "buy";
         cex_amt = trade.cexamtout;
@@ -136,26 +152,28 @@ async function make_cex_dex_trade(trade) {
     // sell on dex, buy on cex
     else if (trade.side = "Ask" && trade.amount >= MIN_AMT && trade.profit >= MIN_PROFIT) {
 
-        // execute buy transaction on cex first
-        cex_order = await trade.exchange_var.createOrder('UNB/USDT', "market", "buy", trade.amount, trade.exchange_price);
-
-        // execute sell transaction on uniswapv3
+        // execute sell transaction on uniswapv3 first?
         dex_order = await web3Lib.swapExactInputSingle(
             web3,
             uniswapV3Router,
             CONFIG.CHAIN_ID_ARBITRUM,
             TOKEN0.address, // UND
             TOKEN1.address, // USDC
-            DEX_FEE_STANDARD,
-            new bn(trade.amount).multipliedBy(1e18).toFixed(), // amountIn
-            new bn(trade.cexamtin + MIN_PROFIT).multipliedBy(1e6).toFixed(0), // amountOutMinimum
+            trade.dex_fee_standard,
+            new bn(trade.amount).multipliedBy(10 ** baseToken.decimals).toFixed(), // amountIn
+            new bn(trade.cexamtin + MIN_PROFIT).multipliedBy(10 ** quoteToken.decimals).toFixed(0), // amountOutMinimum
             0
         );
+        console.log("dex_order:", dex_order);
 
-        console.log("dex_order:", dex_order)
+        // execute buy transaction on cex second?
+        cex_order = await trade.exchange_var.createOrder(CEX_SYMBOL, "market", "buy", trade.amount, trade.exchange_price);
+        console.log("cex_order:", cex_order.id);
 
         dex_side = "sell";
         cex_amt = trade.cexamtin;
+    } else {
+        return false;
     }
 
     let log = {
@@ -178,6 +196,7 @@ async function make_cex_dex_trade(trade) {
     };
     console.log(log);
     fs.appendFile('./logs/dextrades.txt', JSON.stringify(log) + ",\n", (err) => { });
+    return true;
 }
 
 // // run every 5 seconds
@@ -186,6 +205,8 @@ run();
 async function run() {
 
     try {
+        // get dex reserves
+        let dex_reserves = await get_dex_reserves();
 
         // initialize connection with exchanges
         let _exchanges = _initAndTestConnections();
@@ -193,22 +214,26 @@ async function run() {
         // fetch current trading fees from all exchanges
         var exchange_vars = [];
         _exchanges.forEach(async function (item, index) {
+            let balance = await item.exchange.fetchBalance();
             exchange_vars.push({
-                exchange_var: item,
-                fee: await exchange.fetchTradingFee(item, 'UNB/USDT')
+                exchange_var: item.exchange,
+                fee: await exchange.fetchTradingFee(item.exchange, CEX_SYMBOL),
+                reserves0: balance[TOKEN0['symbol']]['free'] * RESERVES_MULT,
+                reserves1: balance[TOKEN1['symbol']]['free'] * RESERVES_MULT,
+                minamt: item.minamt
             });
         });
 
-        // fees = {};
-        // fees['kucoin'] = await exchange.fetchTradingFee(kucoin, 'UNB/USDT');
-        // fees['huobi'] = await exchange.fetchTradingFee(huobi, 'UNB/USDT');
-
-        // init tickhandler
-        var tickHandler = new TickHandler(DELTA_DECIMAL, SPACING);
         // get pool_info
         var poolInfo = await univ3.getPoolInfo(undUsdcPool, baseToken, quoteToken);
+        // init tickhandler
+        var tickHandler = new TickHandler(TOKEN0.decimals - TOKEN1.decimals, poolInfo.tickSpacing);
         // convert price
         poolInfo['sqrtP'] = convert_price(poolInfo['sqrtPriceX96']);
+        //validate current tick
+        if (tickHandler._get_pool_tick_from_sqrt_price(poolInfo.sqrtP) != poolInfo.tick) {
+            throw "could not validate current tick";
+        }
         // set current tick on tickhandler
         tickHandler.set_current_tick_and_sqrt_price(poolInfo['sqrtP']);
         // populate liquidity in neighbouring ticks (see param NEIGHBOUR_DEPTH)
@@ -220,9 +245,18 @@ async function run() {
         // loop over exchanges to check for arb
         for (let _exchange of exchange_vars) {
             // query cex orderbook
-            orderbook = await exchange.fetchOrderBook(_exchange.exchange_var, 'UNB/USDT');
+            orderbook = await exchange.fetchOrderBook(_exchange.exchange_var, CEX_SYMBOL);
+
+            // reserves
+            reserves = {
+                cex0: _exchange.reserves0,
+                cex1: _exchange.reserves1,
+                dex0: dex_reserves.reserves0,
+                dex1: dex_reserves.reserves1
+            };
+
             // call algo
-            result = walk_the_book_x(orderbook.bids, orderbook.asks, poolInfo, _exchange.fee['taker'], DEX_FEE, tickHandler);
+            result = walk_the_book_x(orderbook.bids, orderbook.asks, poolInfo, _exchange.fee['taker'], poolInfo.fee / 1e6, tickHandler, reserves = reserves);
 
             // if result is not null, arb found: break and trade
             if (result != null) {
@@ -232,6 +266,10 @@ async function run() {
                     result['exchange_price'] = orderbook['asks'][0][0];
                 }
                 console.log(result);
+
+                if (result.amount * result.exchange_price < _exchange.minamt) continue;
+                
+                result.dex_fee_standard = poolInfo.fee;               
                 result['exchange_var'] = _exchange.exchange_var;
 
                 //arb found, make trade

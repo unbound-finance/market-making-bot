@@ -1198,6 +1198,26 @@ const NETWORK_RPC_ARBITRUM = "https://arb1.arbitrum.io/rpc"
 const CHAIN_ID_POLYGON = 137;
 const CHAIN_ID_ARBITRUM = 42161;
 
+const ERC20_ABI = [{
+  "constant": true,
+  "inputs": [
+      {
+          "name": "_owner",
+          "type": "address"
+      }
+  ],
+  "name": "balanceOf",
+  "outputs": [
+      {
+          "name": "balance",
+          "type": "uint256"
+      }
+  ],
+  "payable": false,
+  "stateMutability": "view",
+  "type": "function"
+}];
+
 module.exports = {
     UNI_V3_POOL_POLYGON,
     UNI_V3_POOL_ARBITRUM,
@@ -1207,5 +1227,6 @@ module.exports = {
     NETWORK_RPC_POLYGON,
     NETWORK_RPC_ARBITRUM,
     CHAIN_ID_POLYGON,
-    CHAIN_ID_ARBITRUM
+    CHAIN_ID_ARBITRUM,
+    ERC20_ABI
 }
