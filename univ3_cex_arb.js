@@ -124,12 +124,12 @@ async function make_cex_dex_trade(trade) {
     // precision handling
     trade.amount = Math.floor(trade.amount * AMT_PRECISION) / AMT_PRECISION;
 
-    var cex_order, dex_order, dex_side, cex_amt;
+    var cex_order, dex_order, dex_side, cex_amt, success = true;
     // buy on dex, sell on cex
     if (trade.side == "Bid" && trade.amount >= MIN_AMT && trade.profit >= MIN_PROFIT) {
 
         // execute buy transaction on uniswapv3 first?
-        dex_order = await web3Lib.swapExactOutputSingle(
+        await web3Lib.swapExactOutputSingle(
             web3,
             uniswapV3Router,
             CONFIG.CHAIN_ID_ARBITRUM,
@@ -138,14 +138,19 @@ async function make_cex_dex_trade(trade) {
             trade.dex_fee_standard,
             new bn(trade.amount).multipliedBy(10 ** baseToken.decimals).toFixed(), // amountOut
             new bn(trade.cexamtout - MIN_PROFIT).multipliedBy(10 ** quoteToken.decimals).toFixed(0), //amountInMaximum
-            0
-        );
-        console.log("dex_order:", dex_order);
+            0,
+            trade.profit / trade.eth_price //allowedCost
+        ).then(async (tx) => {
+            cex_order = await trade.exchange_var.createOrder(CEX_SYMBOL, "market", "sell", trade.amount, trade.exchange_price);
+            dex_order = tx;
+        }).catch(err => {
+            console.log(err);
+            success = false;
+        });
+        if (!success) { return false; }
 
-        // execute sell transaction on cex after?
-        cex_order = await trade.exchange_var.createOrder(CEX_SYMBOL, "market", "sell", trade.amount, trade.exchange_price);
         console.log("cex_order:", cex_order.id);
-
+        console.log("dex_order:", dex_order);
         dex_side = "buy";
         cex_amt = trade.cexamtout;
     }
@@ -162,14 +167,19 @@ async function make_cex_dex_trade(trade) {
             trade.dex_fee_standard,
             new bn(trade.amount).multipliedBy(10 ** baseToken.decimals).toFixed(), // amountIn
             new bn(trade.cexamtin + MIN_PROFIT).multipliedBy(10 ** quoteToken.decimals).toFixed(0), // amountOutMinimum
-            0
-        );
-        console.log("dex_order:", dex_order);
+            0,
+            trade.profit / trade.eth_price
+        ).then(async (tx) => {
+            cex_order = await trade.exchange_var.createOrder(CEX_SYMBOL, "market", "buy", trade.amount, trade.exchange_price);
+            dex_order = tx;
+        }).catch(err => {
+            console.log(err);
+            success = false;
+        });
+        if (!success) { return false; }
 
-        // execute buy transaction on cex second?
-        cex_order = await trade.exchange_var.createOrder(CEX_SYMBOL, "market", "buy", trade.amount, trade.exchange_price);
         console.log("cex_order:", cex_order.id);
-
+        console.log("dex_order:", dex_order);
         dex_side = "sell";
         cex_amt = trade.cexamtin;
     } else {
@@ -220,7 +230,8 @@ async function run() {
                 fee: await exchange.fetchTradingFee(item.exchange, CEX_SYMBOL),
                 reserves0: balance[TOKEN0['symbol']]['free'] * RESERVES_MULT,
                 reserves1: balance[TOKEN1['symbol']]['free'] * RESERVES_MULT,
-                minamt: item.minamt
+                minamt: item.minamt,
+                eth: await item.exchange.fetchTicker('ETH/USDC')
             });
         });
 
@@ -255,6 +266,8 @@ async function run() {
                 dex1: dex_reserves.reserves1
             };
 
+            console.log("reserves:", reserves);
+
             // call algo
             result = walk_the_book_x(orderbook.bids, orderbook.asks, poolInfo, _exchange.fee['taker'], poolInfo.fee / 1e6, tickHandler, reserves = reserves);
 
@@ -266,10 +279,12 @@ async function run() {
                     result['exchange_price'] = orderbook['asks'][0][0];
                 }
                 console.log(result);
-
-                if (result.amount * result.exchange_price < _exchange.minamt) continue;
                 
-                result.dex_fee_standard = poolInfo.fee;               
+                // check minimum trade requirements
+                if (result.amount * result.exchange_price < _exchange.minamt) continue;
+
+                result.eth_price = (_exchange.eth['bid'] + _exchange.eth['ask']) / 2.0;
+                result.dex_fee_standard = poolInfo.fee;
                 result['exchange_var'] = _exchange.exchange_var;
 
                 //arb found, make trade

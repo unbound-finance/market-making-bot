@@ -4,7 +4,7 @@ const Tx = require('ethereumjs-tx')
 var account = process.env.ADDRESS; // account address accociated with privateKey
 var privateKey = Buffer.from(process.env.PRIVATE_KEY, 'hex') // without 0x
 
-exports.swapExactInputSingle = async(web3, routerContractInstance, chainId, tokenIn, tokenOut, fee, amountIn, amountOutMinimum, sqrtPriceLimitX96) => {
+exports.swapExactInputSingle = async(web3, routerContractInstance, chainId, tokenIn, tokenOut, fee, amountIn, amountOutMinimum, sqrtPriceLimitX96, allowedCost = Infinity) => {
     
 
     return new Promise(function(resolve, reject){
@@ -33,9 +33,13 @@ exports.swapExactInputSingle = async(web3, routerContractInstance, chainId, toke
                     gasPrice = parseFloat(gasPrice).toFixed(0)
                     // console.log("GAS estimation: " + gasAmount)
                     // console.log("GAS PRICE: " + gasPrice)
-                    // let cost = (new bn(gasPrice)).multipliedBy(gasAmount).toFixed()
+                    let cost = (new bn(gasPrice)).multipliedBy(gasAmount).toFixed()
                     // console.log("TX COST in wei: " + cost)
                     // console.log("TX COST in eth: " + web3.utils.fromWei(cost))
+                    cost = web3.utils.fromWei(cost)
+                    if (cost > allowedCost){
+                        reject("Could not proceed. Gas costs too high!")
+                    }
     
                     web3.eth.getTransactionCount(account, function(err2, _nonce) {
     
@@ -91,7 +95,7 @@ exports.swapExactInputSingle = async(web3, routerContractInstance, chainId, toke
 }
 
 
-exports.swapExactOutputSingle = async(web3, routerContractInstance, chainId, tokenIn, tokenOut, fee, amountOut, amountInMaximum, sqrtPriceLimitX96) => {
+exports.swapExactOutputSingle = async(web3, routerContractInstance, chainId, tokenIn, tokenOut, fee, amountOut, amountInMaximum, sqrtPriceLimitX96, allowedCost = Infinity) => {
     
 
     return new Promise(function(resolve, reject){
@@ -120,9 +124,13 @@ exports.swapExactOutputSingle = async(web3, routerContractInstance, chainId, tok
                     gasPrice = parseFloat(gasPrice).toFixed(0)
                     // console.log("GAS estimation: " + gasAmount)
                     // console.log("GAS PRICE: " + gasPrice)
-                    // let cost = (new bn(gasPrice)).multipliedBy(gasAmount).toFixed()
+                    let cost = (new bn(gasPrice)).multipliedBy(gasAmount).toFixed()
                     // console.log("TX COST in wei: " + cost)
                     // console.log("TX COST in eth: " + web3.utils.fromWei(cost))
+                    cost = web3.utils.fromWei(cost)
+                    if (cost > allowedCost){
+                        reject("Could not proceed. Gas costs too high!")
+                    }
     
                     web3.eth.getTransactionCount(account, function(err2, _nonce) {
     
