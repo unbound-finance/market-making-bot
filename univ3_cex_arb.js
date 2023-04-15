@@ -155,7 +155,7 @@ async function make_cex_dex_trade(trade) {
         cex_amt = trade.cexamtout;
     }
     // sell on dex, buy on cex
-    else if (trade.side = "Ask" && trade.amount >= MIN_AMT && trade.profit >= MIN_PROFIT) {
+    else if (trade.side == "Ask" && trade.amount >= MIN_AMT && trade.profit >= MIN_PROFIT) {
 
         // execute sell transaction on uniswapv3 first?
         dex_order = await web3Lib.swapExactInputSingle(
